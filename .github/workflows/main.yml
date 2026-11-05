@@ -27,10 +27,10 @@ jobs:
           xcode-version: latest-stable
 
       - name: Checkout
-        uses: actions/checkout@main
+        uses: actions/checkout@v4
         with:
-            repository: roothide/Dopamine-roothide
-            submodules: recursive
+          repository: roothide/Dopamine-roothide
+          submodules: recursive
 
       - name: Install Procursus
         uses: dhinakg/procursus-action@main
@@ -40,73 +40,98 @@ jobs:
       - name: Install better GNU Make
         run: |
           brew install make
-          echo "PATH=$(brew --prefix make)/libexec/gnubin:$PATH" >> $GITHUB_ENV
+          echo "PATH=$(brew --prefix make)/libexec/gnubin:$PATH" >> "$GITHUB_ENV"
 
       - name: Install THEOS
         run: |
-          set -x
+          set -eux
           export BASEDIR="$(pwd)"
           export THEOS="${BASEDIR}/theos"
-          mkdir -p $THEOS
-          curl -fsSL https://raw.githubusercontent.com/roothide/theos/master/bin/install-theos >> install-theos.sh
+          mkdir -p "$THEOS"
+          curl -fsSL https://raw.githubusercontent.com/roothide/theos/master/bin/install-theos > install-theos.sh
           gsed -E "/^\s*get_theos\s*$/,+1 s/^(\s*)(get_sdks)\s*$/\1mkdir -p \${THEOS}\/sdks\n\1touch \${THEOS}\/sdks\/sdk\n\1\2/g" -i install-theos.sh
           bash install-theos.sh
-          curl -L https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz --output $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
-          gunzip $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
-          tar -xf $THEOS/sdks/iPhoneOS16.5.sdk.tar -C $THEOS/sdks
-          rm $THEOS/sdks/iPhoneOS16.5.sdk.tar
-          cd $BASEDIR
+          curl -fL https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz --output "$THEOS/sdks/iPhoneOS16.5.sdk.tar.xz"
+          tar -xJf "$THEOS/sdks/iPhoneOS16.5.sdk.tar.xz" -C "$THEOS/sdks"
+          rm "$THEOS/sdks/iPhoneOS16.5.sdk.tar.xz"
+          cd "$BASEDIR"
 
       - name: Build and Install trustcache
         run: |
-          set -x
+          set -eux
           git clone https://github.com/CRKatri/trustcache
           cd trustcache
           export CFLAGS="$CFLAGS -I$(brew --prefix openssl)/include -arch arm64"
           export LDFLAGS="$LDFLAGS -L$(brew --prefix openssl)/lib -arch arm64"
-          gmake -j$(sysctl -n hw.logicalcpu) OPENSSL=1
+          gmake -j"$(sysctl -n hw.logicalcpu)" OPENSSL=1
           sudo cp trustcache /opt/procursus/bin/
 
       - name: Set Environment Variables
         run: |
-          set -x
+          set -eux
           T2=$(TZ=UTC-2 date +'%Y%m%d_%H%M%S')
           TS=$(date -j -f "%Y%m%d_%H%M%S" "${T2}" +%s)
           SHASH=$(git rev-parse --short HEAD)
-          echo "ctime=${T2}" >> $GITHUB_ENV
-          echo "ctimestamp=${TS}" >> $GITHUB_ENV
-          echo "shorthash=${SHASH}" >> $GITHUB_ENV
+          echo "ctime=${T2}" >> "$GITHUB_ENV"
+          echo "ctimestamp=${TS}" >> "$GITHUB_ENV"
+          echo "shorthash=${SHASH}" >> "$GITHUB_ENV"
 
       - name: Install libarchive
         run: |
           brew install libarchive
 
       - name: Build
+        shell: bash
         run: |
+          set -euo pipefail
           set -x
           export BASEDIR="$(pwd)"
           export THEOS="${BASEDIR}/theos"
           plutil -insert items.4 -xml "<dict><key>cell</key><string>PSGroupCell</string><key>label</key><string>BUILDER</string></dict>" ./Application/Dopamine/UI/Settings/Credits.plist
           plutil -insert items.5 -xml "<dict><key>cell</key><string>PSGroupCell</string><key>headerCellClass</key><string>DOCreditsCell</string><key>names</key><array><dict><key>name</key><string>${{ github.actor }}</string><key>link</key><string>https://github.com/${{ github.repository }}</string></dict></array></dict>" ./Application/Dopamine/UI/Settings/Credits.plist
-          gmake -j$(sysctl -n hw.logicalcpu) NIGHTLY=1
+          gmake -j"$(sysctl -n hw.logicalcpu)" NIGHTLY=1
+
           VERSION="("$(cat ./BaseBin/_external/basebin/.version)-$(cat ./BaseBin/_external/basebin/.version-roothide)-$(git rev-parse --short HEAD)")"-$(TZ=UTC git show -s --date=format-local:'%Y.%m.%d-%Z-%H.%M.%S' --format='%cd' HEAD)
-          mv ./Application/Dopamine.ipa  "./Application/roothide-Dopamine-${VERSION}.ipa"
-          mv ./Application/Dopamine.tipa "./Application/roothide-Dopamine-${VERSION}.tipa"
-          echo "version=${VERSION}" >> $GITHUB_ENV
 
-      - name: Upload Artifact
-        id: dopamine-latest-upload
-        uses: actions/upload-artifact@main
-        with:
-          name: Dopamine
-          path: |
-            ${{ github.workspace }}/Application/roothide-Dopamine-${{ env.version }}.ipa
-          archive: false
+          # Upstream build may already rename Dopamine.ipa/.tipa.
+          shopt -s nullglob
+          ipa_files=(./Application/Dopamine-roothide-*.ipa)
+          tipa_files=(./Application/Dopamine-roothide-*.tipa)
 
-      - name: Upload Artifact(TIPA)
-        id: dopamine-latest-upload-tipa
-        uses: actions/upload-artifact@main
+          if [[ -f ./Application/Dopamine.ipa ]]; then
+            ipa_source=./Application/Dopamine.ipa
+          elif (( ${#ipa_files[@]} == 1 )); then
+            ipa_source="${ipa_files[0]}"
+          else
+            echo "ERROR: Expected one IPA in Application/, found ${#ipa_files[@]} renamed IPA(s)." >&2
+            ls -la ./Application/*.ipa 2>/dev/null || true
+            exit 1
+          fi
+
+          if [[ -f ./Application/Dopamine.tipa ]]; then
+            tipa_source=./Application/Dopamine.tipa
+          elif (( ${#tipa_files[@]} == 1 )); then
+            tipa_source="${tipa_files[0]}"
+          else
+            echo "ERROR: Expected one TIPA in Application/, found ${#tipa_files[@]} renamed TIPA(s)." >&2
+            ls -la ./Application/*.tipa 2>/dev/null || true
+            exit 1
+          fi
+
+          mv "$ipa_source" "./Application/roothide-Dopamine-${VERSION}.ipa"
+          mv "$tipa_source" "./Application/roothide-Dopamine-${VERSION}.tipa"
+          echo "version=${VERSION}" >> "$GITHUB_ENV"
+
+      - name: Upload Artifact (IPA)
+        uses: actions/upload-artifact@v4
         with:
-          path: |
-            ${{ github.workspace }}/Application/roothide-Dopamine-${{ env.version }}.tipa
-          archive: false
+          name: Dopamine-IPA
+          path: ${{ github.workspace }}/Application/roothide-Dopamine-${{ env.version }}.ipa
+          if-no-files-found: error
+
+      - name: Upload Artifact (TIPA)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dopamine-TIPA
+          path: ${{ github.workspace }}/Application/roothide-Dopamine-${{ env.version }}.tipa
+          if-no-files-found: error
