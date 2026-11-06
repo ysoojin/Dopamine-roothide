@@ -13,6 +13,9 @@ on:
       - ".gitignore"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -135,3 +138,27 @@ jobs:
           name: Dopamine-TIPA
           path: ${{ github.workspace }}/Application/roothide-Dopamine-${{ env.version }}.tipa
           if-no-files-found: error
+
+      # Artifacts above are always downloaded as ZIP by GitHub.
+      # Release assets can be downloaded directly as .ipa / .tipa.
+      - name: Publish IPA and TIPA as direct-download Release assets
+        if: ${{ github.event_name != 'pull_request' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ env.version }}
+        run: |
+          set -euo pipefail
+          tag="build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ipa="./Application/roothide-Dopamine-${VERSION}.ipa"
+          tipa="./Application/roothide-Dopamine-${VERSION}.tipa"
+          test -f "$ipa"
+          test -f "$tipa"
+
+          gh release create "$tag" "$ipa" "$tipa" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Dopamine roothide ${VERSION}" \
+            --notes "Automated build from GitHub Actions run ${GITHUB_RUN_ID}. Download the .ipa or .tipa directly from Assets." \
+            --prerelease
+          echo "Download directly from: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}" >> "$GITHUB_STEP_SUMMARY"
